@@ -82,12 +82,24 @@
       <div class="form-row">
         <div class="form-group">
           <label>Pickup Location</label>
-          <input type="text" id="pickup-name" placeholder="e.g., Namur, Leuven...">
-          <small>Type a Belgian city — we'll find coordinates</small>
+          <div class="ac-wrap">
+            <input type="text" id="pickup-name" placeholder="Type 3+ letters to search..."
+                   autocomplete="off"
+                   oninput="acInput(this,'pickup')" onkeydown="acKeydown(event,'pickup')"
+                   onblur="setTimeout(()=>acClose('pickup'),200)">
+            <div class="ac-dropdown" id="pickup-ac"></div>
+          </div>
+          <small>Known logistics hubs or any Belgian city/address</small>
         </div>
         <div class="form-group">
           <label>Delivery Location</label>
-          <input type="text" id="delivery-name" placeholder="e.g., Wavre, Mons...">
+          <div class="ac-wrap">
+            <input type="text" id="delivery-name" placeholder="Type 3+ letters to search..."
+                   autocomplete="off"
+                   oninput="acInput(this,'delivery')" onkeydown="acKeydown(event,'delivery')"
+                   onblur="setTimeout(()=>acClose('delivery'),200)">
+            <div class="ac-dropdown" id="delivery-ac"></div>
+          </div>
           <small>Can be a new location not in existing routes</small>
         </div>
       </div>
@@ -145,7 +157,7 @@
       document.getElementById('tab-' + tab).classList.add('active');
     }
 
-    // Initialize map
+    // Initialize map (Leaflet may be blocked in some environments)
     let map = null, routeLines = [];
     try {
       map = L.map('map').setView([50.8, 4.4], 8);
@@ -156,62 +168,86 @@
       // Add route lines to map — keep a reference per route index for filtering
       routeLines = ROUTES_DATA.map(route => {
         const from = LOCATIONS[route.from];
-        const to = LOCATIONS[route.to];
+        const to   = LOCATIONS[route.to];
         if (from && to) {
           const line = L.polyline(
             [[from.lat, from.lng], [to.lat, to.lng]],
             { color: '#3388ff', weight: 1, opacity: 0.4 }
           ).addTo(map);
-        line.bindPopup(`<b>${route.service}</b><br>${route.from} → ${route.to}<br>
-                        Dep: ${route.departure} | Arr: ${route.arrival}`);
-        return line;
-      }
-      return null;
-    });
+          line.bindPopup(`<b>${route.service}</b><br>${route.from} → ${route.to}<br>
+                          Dep: ${route.departure} | Arr: ${route.arrival}`);
+          return line;
+        }
+        return null;
+      });
 
-    // Add location markers
-    Object.entries(LOCATIONS).forEach(([name, coords]) => {
-      L.circleMarker([coords.lat, coords.lng], {
-        radius: 5, fillColor: '#e74c3c', color: '#fff', 
-        weight: 1, fillOpacity: 0.8
-      }).addTo(map).bindPopup(`<b>${name}</b><br>${coords.city}`);
-    });
+      // Add location markers
+      Object.entries(LOCATIONS).forEach(([name, coords]) => {
+        L.circleMarker([coords.lat, coords.lng], {
+          radius: 5, fillColor: '#e74c3c', color: '#fff',
+          weight: 1, fillOpacity: 0.8
+        }).addTo(map).bindPopup(`<b>${name}</b><br>${coords.city}`);
+      });
+    } catch (e) {
+      console.warn('Map could not be initialised (Leaflet not loaded?):', e.message);
+    }
+
+    // Populate filter dropdowns from data
+    (function () {
+      const froms = [...new Set(ROUTES_DATA.map(r => r.from))].sort();
+      const tos   = [...new Set(ROUTES_DATA.map(r => r.to))].sort();
+      const trcs  = [...new Set(ROUTES_DATA.map(r => r.trc).filter(Boolean))].sort();
+      froms.forEach(v => document.getElementById('filter-from').add(new Option(v, v)));
+      tos.forEach(v   => document.getElementById('filter-to').add(new Option(v, v)));
+      trcs.forEach(v  => document.getElementById('filter-trc').add(new Option(v, v)));
+    })();
 
     // Helper: convert "HH:MM" to minutes
     function hmToMinutes(hm) {
       if (!hm) return null;
-      const [h, m] = hm.split(':').map(Number);
+      const parts = hm.split(':');
+      if (parts.length < 2) return null;
+      const h = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      if (isNaN(h) || isNaN(m)) return null;
       return h * 60 + m;
+    }
+
+    // Helper: minutes → "HH:MM" (formatMinutes is also defined in app.js; this is a local alias)
+    function formatMinutes(mins) {
+      const h = Math.floor(mins / 60) % 24;
+      const m = Math.round(mins % 60);
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
     }
 
     // Render routes table and update map
     function filterRoutes() {
-      const search    = document.getElementById('search-routes').value.toLowerCase();
-      const typeFilter    = document.getElementById('filter-type').value;
-      const dayFilter     = document.getElementById('filter-day').value;
-      const fromFilter    = document.getElementById('filter-from').value;
-      const toFilter      = document.getElementById('filter-to').value;
-      const trcFilter     = document.getElementById('filter-trc').value;
-      const p70p90Filter  = document.getElementById('filter-p70p90').value;
-      const capFilter     = parseInt(document.getElementById('filter-capacity').value) || 0;
-      const timeFromMins  = hmToMinutes(document.getElementById('filter-time-from').value) ?? 0;
-      const timeToMins    = hmToMinutes(document.getElementById('filter-time-to').value) ?? 1439;
+      const search       = document.getElementById('search-routes').value.toLowerCase();
+      const typeFilter   = document.getElementById('filter-type').value;
+      const dayFilter    = document.getElementById('filter-day').value;
+      const fromFilter   = document.getElementById('filter-from').value;
+      const toFilter     = document.getElementById('filter-to').value;
+      const trcFilter    = document.getElementById('filter-trc').value;
+      const p70p90Filter = document.getElementById('filter-p70p90').value;
+      const capFilter    = parseInt(document.getElementById('filter-capacity').value) || 0;
+      const timeFromMins = hmToMinutes(document.getElementById('filter-time-from').value) ?? 0;
+      const timeToMins   = hmToMinutes(document.getElementById('filter-time-to').value) ?? 1439;
 
       const filteredIndices = [];
       ROUTES_DATA.forEach((r, i) => {
-        const matchSearch = !search || 
-          r.from.toLowerCase().includes(search) || 
+        const matchSearch = !search ||
+          r.from.toLowerCase().includes(search) ||
           r.to.toLowerCase().includes(search) ||
           r.service.toLowerCase().includes(search);
-        const matchType  = !typeFilter  || r.tripType === typeFilter;
-        const matchDay   = !dayFilter   || r.ospFrequency.includes(dayFilter);
-        const matchFrom  = !fromFilter  || r.from === fromFilter;
-        const matchTo    = !toFilter    || r.to === toFilter;
-        const matchTrc   = !trcFilter   || r.trc === trcFilter;
+        const matchType  = !typeFilter   || r.tripType === typeFilter;
+        const matchDay   = !dayFilter    || r.ospFrequency.includes(dayFilter);
+        const matchFrom  = !fromFilter   || r.from === fromFilter;
+        const matchTo    = !toFilter     || r.to === toFilter;
+        const matchTrc   = !trcFilter    || r.trc === trcFilter;
         const matchP     = !p70p90Filter || r.p70p90 === p70p90Filter;
-        const matchCap   = !capFilter   || (r.capacity !== null && r.capacity >= capFilter);
-        const dep = r._depMinutes;
-        const matchTime  = dep === null || (dep >= timeFromMins && dep <= timeToMins);
+        const matchCap   = !capFilter    || (r.capacity !== null && r.capacity >= capFilter);
+        const dep        = r._depMinutes;
+        const matchTime  = dep === null  || (dep >= timeFromMins && dep <= timeToMins);
 
         if (matchSearch && matchType && matchDay && matchFrom && matchTo &&
             matchTrc && matchP && matchCap && matchTime) {
@@ -220,14 +256,16 @@
       });
 
       // Update map lines visibility
-      routeLines.forEach((line, i) => {
-        if (!line) return;
-        if (filteredIndices.includes(i)) {
-          if (!map.hasLayer(line)) line.addTo(map);
-        } else {
-          if (map.hasLayer(line)) map.removeLayer(line);
-        }
-      });
+      if (map) {
+        routeLines.forEach((line, i) => {
+          if (!line) return;
+          if (filteredIndices.includes(i)) {
+            if (!map.hasLayer(line)) line.addTo(map);
+          } else {
+            if (map.hasLayer(line)) map.removeLayer(line);
+          }
+        });
+      }
 
       const filtered = filteredIndices.map(i => ROUTES_DATA[i]);
       const container = document.getElementById('routes-table-container');
@@ -238,10 +276,8 @@
       html += '<th>Type</th><th>Days</th><th>P70/P90</th></tr>';
 
       filtered.slice(0, 200).forEach(r => {
-        const depMins = r._depMinutes;
-        const depStr  = depMins !== null ? formatMinutes(depMins) : r.departure;
-        const arrMins = r._arrMinutes;
-        const arrStr  = arrMins !== null ? formatMinutes(arrMins) : r.arrival;
+        const depStr = r._depMinutes !== null ? formatMinutes(r._depMinutes) : r.departure;
+        const arrStr = r._arrMinutes !== null ? formatMinutes(r._arrMinutes) : r.arrival;
         html += `<tr>
           <td>${r.service}</td><td>${r.from}</td><td>${r.to}</td><td>${r.trc || ''}</td>
           <td>${depStr}</td><td>${arrStr}</td>
@@ -252,10 +288,145 @@
         </tr>`;
       });
       html += '</table>';
-      if (filtered.length > 200) html += '<p><em>Showing first 200 of ' + filtered.length + '...</em></p>';
+      if (filtered.length > 200) {
+        html += `<p><em>Showing first 200 of ${filtered.length}...</em></p>`;
+      }
       container.innerHTML = html;
     }
     filterRoutes(); // Initial render
+
+    // ============================================
+    // AUTOCOMPLETE FOR LOCATION INPUTS
+    // ============================================
+    const acState = {
+      pickup:   { selected: null, activeIndex: -1, nominatimTimer: null, results: [] },
+      delivery: { selected: null, activeIndex: -1, nominatimTimer: null, results: [] }
+    };
+
+    function acInput(input, id) {
+      const q = input.value.trim();
+      const state = acState[id];
+      state.selected = null; // clear resolved location when user edits
+
+      if (q.length < 3) { acClose(id); return; }
+
+      const ql = q.toLowerCase();
+      // Search known LOCATIONS — match on hub name or city name
+      const localResults = Object.entries(LOCATIONS)
+        .filter(([name, c]) => name.toLowerCase().includes(ql) || c.city.toLowerCase().includes(ql))
+        .slice(0, 8)
+        .map(([name, c]) => ({
+          label: name,
+          sub: `${c.city} · ${c.lat.toFixed(4)}°N, ${c.lng.toFixed(4)}°E`,
+          lat: c.lat, lng: c.lng, source: 'known'
+        }));
+
+      state.results = localResults;
+      state.activeIndex = -1;
+      renderAcDropdown(id);
+
+      // Debounce Nominatim for locations outside the known set
+      clearTimeout(state.nominatimTimer);
+      state.nominatimTimer = setTimeout(() => fetchAcNominatim(q, id), 400);
+    }
+
+    async function fetchAcNominatim(q, id) {
+      const state = acState[id];
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q + ', Belgium')}&format=json&limit=5&addressdetails=1`,
+          { signal: controller.signal, headers: { 'User-Agent': 'BelgiumRoutePlanner/1.0' } }
+        );
+        const data = await res.json();
+        const nomResults = data.map(d => {
+          const parts = d.display_name.split(',').map(s => s.trim());
+          const label = parts.slice(0, 2).join(', ');
+          return {
+            label,
+            sub: `${parseFloat(d.lat).toFixed(4)}°N, ${parseFloat(d.lon).toFixed(4)}°E · OpenStreetMap`,
+            lat: parseFloat(d.lat), lng: parseFloat(d.lon), source: 'osm'
+          };
+        });
+        // Append Nominatim results that aren't already shown
+        const seen = new Set(state.results.map(r => r.label.toLowerCase()));
+        nomResults.forEach(r => {
+          const key = r.label.toLowerCase();
+          if (!seen.has(key)) { seen.add(key); state.results.push(r); }
+        });
+        state.results = state.results.slice(0, 10);
+        renderAcDropdown(id);
+      } catch (e) { /* keep local results only */ } finally { clearTimeout(timer); }
+    }
+
+    function renderAcDropdown(id) {
+      const state = acState[id];
+      const dd = document.getElementById(id + '-ac');
+      if (!state.results.length) {
+        dd.innerHTML = '<div class="ac-empty">No matches — keep typing or check spelling</div>';
+      } else {
+        // Use data-index / data-id attributes instead of inline JS strings to avoid XSS
+        dd.innerHTML = state.results.map((r, i) => {
+          const cls = 'ac-item' +
+            (r.source === 'known' ? ' ac-known' : ' ac-osm') +
+            (i === state.activeIndex ? ' ac-active' : '');
+          const icon  = r.source === 'known' ? '📦' : '📍';
+          // Escape label and sub for safe HTML insertion
+          const label = r.label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const sub   = r.sub.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          return `<div class="${cls}" data-ac-id="${id}" data-ac-index="${i}" onmousedown="acSelectEl(this)">
+            <span class="ac-icon">${icon}</span>
+            <span>
+              <span class="ac-label">${label}</span>
+              <span class="ac-sub">${sub}</span>
+            </span>
+          </div>`;
+        }).join('');
+      }
+      dd.style.display = 'block';
+    }
+
+    // Called via onmousedown on dropdown items — reads index from data attributes
+    function acSelectEl(el) {
+      const id    = el.dataset.acId;
+      const index = parseInt(el.dataset.acIndex, 10);
+      acSelect(id, index);
+    }
+
+    function acSelect(id, index) {
+      const r = acState[id].results[index];
+      if (!r) return;
+      acState[id].selected = { lat: r.lat, lng: r.lng, name: r.label };
+      document.getElementById(id + '-name').value = r.label;
+      acClose(id);
+    }
+
+    function acKeydown(event, id) {
+      const state = acState[id];
+      const dd = document.getElementById(id + '-ac');
+      if (dd.style.display !== 'block') return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        state.activeIndex = Math.min(state.activeIndex + 1, state.results.length - 1);
+        renderAcDropdown(id);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        state.activeIndex = Math.max(state.activeIndex - 1, -1);
+        renderAcDropdown(id);
+      } else if (event.key === 'Enter' && state.activeIndex >= 0) {
+        event.preventDefault();
+        acSelect(id, state.activeIndex);
+      } else if (event.key === 'Escape') {
+        acClose(id);
+      }
+    }
+
+    function acClose(id) {
+      const dd = document.getElementById(id + '-ac');
+      if (dd) { dd.style.display = 'none'; dd.innerHTML = ''; }
+      acState[id].activeIndex = -1;
+    }
 
     // ============================================
     // GEOCODING (convert city name to coordinates)
@@ -312,8 +483,9 @@
 
       let pickup, delivery;
       try {
-        pickup   = await geocode(document.getElementById('pickup-name').value);
-        delivery = await geocode(document.getElementById('delivery-name').value);
+        // Use pre-resolved location from autocomplete if available, else geocode free text
+        pickup   = acState.pickup.selected   || await geocode(document.getElementById('pickup-name').value);
+        delivery = acState.delivery.selected || await geocode(document.getElementById('delivery-name').value);
       } catch (err) {
         resultsDiv.innerHTML = `<p>❌ Geocoding failed: ${err.message}</p>`;
         return;
