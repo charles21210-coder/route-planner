@@ -47,6 +47,28 @@
         <option value="6">Saturday</option>
         <option value="0">Sunday</option>
       </select>
+      <select id="filter-from" onchange="filterRoutes()">
+        <option value="">All Departing Hubs</option>
+      </select>
+      <select id="filter-to" onchange="filterRoutes()">
+        <option value="">All Arriving Hubs</option>
+      </select>
+      <select id="filter-trc" onchange="filterRoutes()">
+        <option value="">All TRCs</option>
+      </select>
+      <select id="filter-p70p90" onchange="filterRoutes()">
+        <option value="">P70 &amp; P90</option>
+        <option value="P70">P70 only</option>
+        <option value="P90">P90 only</option>
+      </select>
+      <input type="number" id="filter-capacity" placeholder="Min capacity" min="0"
+             oninput="filterRoutes()" style="min-width:140px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <label style="font-size:13px;white-space:nowrap;">Depart between</label>
+        <input type="time" id="filter-time-from" value="00:00" onchange="filterRoutes()" style="min-width:120px;">
+        <label style="font-size:13px;">–</label>
+        <input type="time" id="filter-time-to" value="23:59" onchange="filterRoutes()" style="min-width:120px;">
+      </div>
     </div>
     
     <div id="routes-table-container"></div>
@@ -124,25 +146,27 @@
     }
 
     // Initialize map
-    const map = L.map('map').setView([50.8, 4.4], 8);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap'
-    }).addTo(map);
+    let map = null, routeLines = [];
+    try {
+      map = L.map('map').setView([50.8, 4.4], 8);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
 
-    // Add route lines to map
-    const routeLines = [];
-    ROUTES_DATA.forEach(route => {
-      const from = LOCATIONS[route.from];
-      const to = LOCATIONS[route.to];
-      if (from && to) {
-        const line = L.polyline(
-          [[from.lat, from.lng], [to.lat, to.lng]],
-          { color: '#3388ff', weight: 1, opacity: 0.4 }
-        ).addTo(map);
+      // Add route lines to map — keep a reference per route index for filtering
+      routeLines = ROUTES_DATA.map(route => {
+        const from = LOCATIONS[route.from];
+        const to = LOCATIONS[route.to];
+        if (from && to) {
+          const line = L.polyline(
+            [[from.lat, from.lng], [to.lat, to.lng]],
+            { color: '#3388ff', weight: 1, opacity: 0.4 }
+          ).addTo(map);
         line.bindPopup(`<b>${route.service}</b><br>${route.from} → ${route.to}<br>
                         Dep: ${route.departure} | Arr: ${route.arrival}`);
-        routeLines.push(line);
+        return line;
       }
+      return null;
     });
 
     // Add location markers
@@ -153,40 +177,82 @@
       }).addTo(map).bindPopup(`<b>${name}</b><br>${coords.city}`);
     });
 
-    // Render routes table
-    function filterRoutes() {
-      const search = document.getElementById('search-routes').value.toLowerCase();
-      const typeFilter = document.getElementById('filter-type').value;
-      const dayFilter = document.getElementById('filter-day').value;
+    // Helper: convert "HH:MM" to minutes
+    function hmToMinutes(hm) {
+      if (!hm) return null;
+      const [h, m] = hm.split(':').map(Number);
+      return h * 60 + m;
+    }
 
-      const filtered = ROUTES_DATA.filter(r => {
+    // Render routes table and update map
+    function filterRoutes() {
+      const search    = document.getElementById('search-routes').value.toLowerCase();
+      const typeFilter    = document.getElementById('filter-type').value;
+      const dayFilter     = document.getElementById('filter-day').value;
+      const fromFilter    = document.getElementById('filter-from').value;
+      const toFilter      = document.getElementById('filter-to').value;
+      const trcFilter     = document.getElementById('filter-trc').value;
+      const p70p90Filter  = document.getElementById('filter-p70p90').value;
+      const capFilter     = parseInt(document.getElementById('filter-capacity').value) || 0;
+      const timeFromMins  = hmToMinutes(document.getElementById('filter-time-from').value) ?? 0;
+      const timeToMins    = hmToMinutes(document.getElementById('filter-time-to').value) ?? 1439;
+
+      const filteredIndices = [];
+      ROUTES_DATA.forEach((r, i) => {
         const matchSearch = !search || 
           r.from.toLowerCase().includes(search) || 
           r.to.toLowerCase().includes(search) ||
           r.service.toLowerCase().includes(search);
-        const matchType = !typeFilter || r.tripType === typeFilter;
-        const matchDay = !dayFilter || r.ospFrequency.includes(dayFilter);
-        return matchSearch && matchType && matchDay;
+        const matchType  = !typeFilter  || r.tripType === typeFilter;
+        const matchDay   = !dayFilter   || r.ospFrequency.includes(dayFilter);
+        const matchFrom  = !fromFilter  || r.from === fromFilter;
+        const matchTo    = !toFilter    || r.to === toFilter;
+        const matchTrc   = !trcFilter   || r.trc === trcFilter;
+        const matchP     = !p70p90Filter || r.p70p90 === p70p90Filter;
+        const matchCap   = !capFilter   || (r.capacity !== null && r.capacity >= capFilter);
+        const dep = r._depMinutes;
+        const matchTime  = dep === null || (dep >= timeFromMins && dep <= timeToMins);
+
+        if (matchSearch && matchType && matchDay && matchFrom && matchTo &&
+            matchTrc && matchP && matchCap && matchTime) {
+          filteredIndices.push(i);
+        }
       });
 
+      // Update map lines visibility
+      routeLines.forEach((line, i) => {
+        if (!line) return;
+        if (filteredIndices.includes(i)) {
+          if (!map.hasLayer(line)) line.addTo(map);
+        } else {
+          if (map.hasLayer(line)) map.removeLayer(line);
+        }
+      });
+
+      const filtered = filteredIndices.map(i => ROUTES_DATA[i]);
       const container = document.getElementById('routes-table-container');
-      let html = `<p>Showing ${filtered.length} of ${ROUTES_DATA.length} routes</p>`;
+      let html = `<p><strong>Showing ${filtered.length} of ${ROUTES_DATA.length} routes</strong></p>`;
       html += '<table class="routes-table"><tr>';
-      html += '<th>Service</th><th>From</th><th>To</th><th>Dep</th>';
+      html += '<th>Service</th><th>From</th><th>To</th><th>TRC</th><th>Dep</th>';
       html += '<th>Arr</th><th>Dist</th><th>Dur</th><th>Cap</th>';
-      html += '<th>Type</th><th>Days</th></tr>';
+      html += '<th>Type</th><th>Days</th><th>P70/P90</th></tr>';
 
       filtered.slice(0, 200).forEach(r => {
+        const depMins = r._depMinutes;
+        const depStr  = depMins !== null ? formatMinutes(depMins) : r.departure;
+        const arrMins = r._arrMinutes;
+        const arrStr  = arrMins !== null ? formatMinutes(arrMins) : r.arrival;
         html += `<tr>
-          <td>${r.service}</td><td>${r.from}</td><td>${r.to}</td>
-          <td>${r.departure}</td><td>${r.arrival}</td>
-          <td>${r.plannedDistance}km</td><td>${r.plannedDuration}min</td>
-          <td>${r.capacity}</td><td>${r.tripType}</td>
-          <td>${r.ospFrequency}</td>
+          <td>${r.service}</td><td>${r.from}</td><td>${r.to}</td><td>${r.trc || ''}</td>
+          <td>${depStr}</td><td>${arrStr}</td>
+          <td>${r.plannedDistance != null ? r.plannedDistance + 'km' : ''}</td>
+          <td>${r.plannedDuration != null ? r.plannedDuration + 'min' : ''}</td>
+          <td>${r.capacity != null ? r.capacity : ''}</td>
+          <td>${r.tripType}</td><td>${r.ospFrequency}</td><td>${r.p70p90 || ''}</td>
         </tr>`;
       });
       html += '</table>';
-      if (filtered.length > 200) html += '<p><em>Showing first 200...</em></p>';
+      if (filtered.length > 200) html += '<p><em>Showing first 200 of ' + filtered.length + '...</em></p>';
       container.innerHTML = html;
     }
     filterRoutes(); // Initial render
@@ -202,17 +268,33 @@
           return { lat: coords.lat, lng: coords.lng, name: name };
         }
       }
-      // If not found, use free Nominatim geocoder
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityName + ', Belgium')}&format=json&limit=1`
-      );
-      const data = await response.json();
-      if (data.length > 0) {
-        return { 
-          lat: parseFloat(data[0].lat), 
-          lng: parseFloat(data[0].lon), 
-          name: data[0].display_name 
-        };
+      // If not found, use free Nominatim geocoder with timeout and User-Agent
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityName + ', Belgium')}&format=json&limit=1`,
+          {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'BelgiumRoutePlanner/1.0' }
+          }
+        );
+        const data = await response.json();
+        if (data.length > 0) {
+          return { 
+            lat: parseFloat(data[0].lat), 
+            lng: parseFloat(data[0].lon), 
+            name: data[0].display_name 
+          };
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          console.warn('Geocoding timed out for:', cityName);
+        } else {
+          console.error('Geocoding error:', err);
+        }
+      } finally {
+        clearTimeout(timer);
       }
       return null;
     }
@@ -222,13 +304,25 @@
     // ============================================
     async function searchRoutes() {
       const resultsDiv = document.getElementById('results-container');
-      resultsDiv.innerHTML = '<p>🔄 Searching...</p>';
+      resultsDiv.innerHTML = `
+        <div style="text-align:center;padding:30px;">
+          <div class="spinner"></div>
+          <p id="search-status" style="margin-top:15px;font-size:16px;">🔄 Geocoding locations...</p>
+        </div>`;
 
-      const pickup = await geocode(document.getElementById('pickup-name').value);
-      const delivery = await geocode(document.getElementById('delivery-name').value);
+      let pickup, delivery;
+      try {
+        pickup   = await geocode(document.getElementById('pickup-name').value);
+        delivery = await geocode(document.getElementById('delivery-name').value);
+      } catch (err) {
+        resultsDiv.innerHTML = `<p>❌ Geocoding failed: ${err.message}</p>`;
+        return;
+      }
 
-      if (!pickup) { resultsDiv.innerHTML = '<p>❌ Could not find pickup location</p>'; return; }
-      if (!delivery) { resultsDiv.innerHTML = '<p>❌ Could not find delivery location</p>'; return; }
+      if (!pickup)   { resultsDiv.innerHTML = '<p>❌ Could not find pickup location. Try a Belgian city name.</p>'; return; }
+      if (!delivery) { resultsDiv.innerHTML = '<p>❌ Could not find delivery location. Try a Belgian city name.</p>'; return; }
+
+      document.getElementById('search-status').textContent = '🔄 Searching routes...';
 
       const request = {
         pickupLocation: pickup,
@@ -239,8 +333,11 @@
         dayOfWeek: parseInt(document.getElementById('delivery-day').value)
       };
 
-      const results = findDeliveryOptions(request);
-      renderResults(results, resultsDiv);
+      // Use setTimeout so the "Searching..." UI renders before heavy computation
+      setTimeout(() => {
+        const results = findDeliveryOptions(request);
+        renderResults(results, resultsDiv);
+      }, 50);
     }
   </script>
 

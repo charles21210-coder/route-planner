@@ -76148,9 +76148,24 @@ function parseDays(freq) {
   return freq.split('').map(Number);
 }
 
-// Helper: parse time string "HH:MM:SS" to minutes since midnight
+// Helper: parse time — supports "HH:MM:SS" and Excel fractional-day with European comma decimal
+// e.g. "0,0556018518518519" = fraction of 24h → minutes since midnight
 function timeToMinutes(timeStr) {
   if (!timeStr || timeStr === 'X') return null;
-  const parts = timeStr.split(':');
-  return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+  if (timeStr.includes(':')) {
+    const parts = timeStr.split(':');
+    return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+  }
+  // European decimal fraction of day (comma as decimal separator, may use E notation)
+  const val = parseFloat(timeStr.replace(',', '.'));
+  if (isNaN(val)) return null;
+  return Math.round(val * 24 * 60);
 }
+
+// Pre-process data once at startup for performance
+console.log('Routes loaded:', ROUTES_DATA.length);
+ROUTES_DATA.forEach(route => {
+  route._parsedDays = parseDays(route.ospFrequency);
+  route._depMinutes = timeToMinutes(route.departure);
+  route._arrMinutes = timeToMinutes(route.arrival);
+});
