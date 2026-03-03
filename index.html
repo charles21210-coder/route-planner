@@ -458,7 +458,18 @@
       filtered.forEach(r => { typeCounts[r.tripType] = (typeCounts[r.tripType] || 0) + 1; });
       document.getElementById('stat-type').textContent =
         Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
-      const netLoad = getNetworkAvgLoad();
+      let netLoad = null;
+      if (Object.keys(TRUCKLOAD_STATS).length > 0) {
+        let totalLoad = 0, count = 0;
+        filtered.forEach(r => {
+          const tl = getTruckloadStats(r.service, r.trip, r.from, r.to);
+          if (tl) {
+            totalLoad += tl.avgLoadPct;
+            count++;
+          }
+        });
+        if (count > 0) netLoad = totalLoad / count;
+      }
       const netLoadEl = document.getElementById('stat-netload');
       if (netLoadEl) {
         netLoadEl.textContent = netLoad !== null ? netLoad.toFixed(1) + '%' : '-';
