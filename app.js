@@ -605,6 +605,7 @@ async function refineWithOSRM(results, request) {
       r.realDetourKm          = Math.round((viaRoute.distanceKm - directRoute.distanceKm) * 10) / 10;
       r.realAdditionalMinutes = Math.round(viaRoute.durationMin - directRoute.durationMin);
       r.routeGeometry         = viaRoute.geometry;
+      r.directRouteGeometry   = directRoute.geometry;
     }
   }
 
