@@ -179,6 +179,16 @@
     </div>
 
     <div id="results-container"></div>
+
+    <!-- Planner map: shown when a result row is clicked -->
+    <div id="planner-map-container" style="display:none; margin-top:24px;">
+      <h3 style="margin-bottom:10px; color:#1a237e;">🗺️ Route &amp; Detour Map
+        <small style="font-weight:normal; font-size:13px; color:#666; margin-left:8px;">
+          Blue = original route &nbsp;|&nbsp; Red dashed = detour path
+        </small>
+      </h3>
+      <div id="planner-map" style="height:420px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.15);"></div>
+    </div>
   </section>
 
   <script src="routes-data.js"></script>
@@ -197,7 +207,16 @@
     }
 
     // Initialize map (Leaflet may be blocked in some environments)
-    let map = null, routeLines = [];
+    let map = null, routeLines = [], locationMarkers = {}, selectedHistogramHour = null;
+    let plannerMap = null, plannerLayers = [];
+    let lastSearchRequest = null, lastSearchResults = null;
+
+    const TRIP_COLORS = {
+      'INTER ISC/BPI': '#3388ff',
+      'DISTRIBUTION':  '#27ae60',
+      'MILKROUND':     '#f39c12',
+      'HOME PICKUP':   '#e74c3c'
+    };
     try {
       map = L.map('map').setView([50.8, 4.4], 8);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -209,9 +228,10 @@
         const from = LOCATIONS[route.from];
         const to   = LOCATIONS[route.to];
         if (from && to) {
+          const color = TRIP_COLORS[route.tripType] || '#888';
           const line = L.polyline(
             [[from.lat, from.lng], [to.lat, to.lng]],
-            { color: '#3388ff', weight: 1, opacity: 0.4 }
+            { color, weight: 1, opacity: 0.4 }
           ).addTo(map);
           line.bindPopup(`<b>${route.service}</b><br>${route.from} → ${route.to}<br>
                           Dep: ${route.departure} | Arr: ${route.arrival}`);
@@ -220,16 +240,51 @@
         return null;
       });
 
-      // Add location markers
+      // Add location markers — stored by name so we can toggle visibility with filters
       Object.entries(LOCATIONS).forEach(([name, coords]) => {
-        L.circleMarker([coords.lat, coords.lng], {
+        locationMarkers[name] = L.circleMarker([coords.lat, coords.lng], {
           radius: 5, fillColor: '#e74c3c', color: '#fff',
           weight: 1, fillOpacity: 0.8
         }).addTo(map).bindPopup(`<b>${name}</b><br>${coords.city}`);
       });
+
+      // Add trip-type colour legend
+      const legend = L.control({ position: 'bottomright' });
+      legend.onAdd = function () {
+        const div = L.DomUtil.create('div', 'map-legend');
+        div.innerHTML = '<b style="display:block;margin-bottom:4px;">Trip Types</b>' +
+          Object.entries(TRIP_COLORS).map(function (entry) {
+            return '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">' +
+              '<span style="background:' + entry[1] + ';width:18px;height:4px;display:inline-block;border-radius:2px;flex-shrink:0;"></span>' +
+              '<span>' + entry[0] + '</span></div>';
+          }).join('');
+        return div;
+      };
+      legend.addTo(map);
     } catch (e) {
       console.warn('Map could not be initialised (Leaflet not loaded?):', e.message);
     }
+
+    // Histogram bar click → hour filter
+    (function () {
+      const histCanvas = document.getElementById('histogram-canvas');
+      if (histCanvas) {
+        histCanvas.addEventListener('click', function (e) {
+          const rect = histCanvas.getBoundingClientRect();
+          const x    = e.clientX - rect.left;
+          const padL = 30;
+          const barW = (histCanvas.width - padL - 10) / 24;
+          const hour = Math.floor((x - padL) / barW);
+          if (hour >= 0 && hour < 24) {
+            selectedHistogramHour = (selectedHistogramHour === hour) ? null : hour;
+            document.getElementById('histogram-hint').textContent = selectedHistogramHour !== null
+              ? '(hour ' + selectedHistogramHour + ':xx selected — click again to clear)'
+              : '';
+            filterRoutes();
+          }
+        });
+      }
+    })();
 
     // Populate filter dropdowns from data
     (function () {
@@ -259,11 +314,11 @@
       return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
     }
 
-    // Render routes table and update map
+    // Render routes table, update map, and refresh all dashboard widgets
     function filterRoutes() {
       const search       = document.getElementById('search-routes').value.toLowerCase();
       const typeFilter   = document.getElementById('filter-type').value;
-      const dayFilter    = document.getElementById('filter-day').value;
+      const dayFilters   = [...document.querySelectorAll('#filter-day-multi input:checked')].map(cb => cb.value);
       const fromFilter   = document.getElementById('filter-from').value;
       const toFilter     = document.getElementById('filter-to').value;
       const trcFilter    = document.getElementById('filter-trc').value;
@@ -272,6 +327,11 @@
       const timeFromMins = hmToMinutes(document.getElementById('filter-time-from').value) ?? 0;
       const timeToMins   = hmToMinutes(document.getElementById('filter-time-to').value) ?? 1439;
 
+      // Keep pill labels in sync with checkbox state
+      document.querySelectorAll('#filter-day-multi label').forEach(lbl => {
+        lbl.classList.toggle('checked', lbl.querySelector('input').checked);
+      });
+
       const filteredIndices = [];
       ROUTES_DATA.forEach((r, i) => {
         const matchSearch = !search ||
@@ -279,7 +339,7 @@
           r.to.toLowerCase().includes(search) ||
           r.service.toLowerCase().includes(search);
         const matchType  = !typeFilter   || r.tripType === typeFilter;
-        const matchDay   = !dayFilter    || r.ospFrequency.includes(dayFilter);
+        const matchDay   = dayFilters.length === 0 || dayFilters.some(d => r.ospFrequency.includes(d));
         const matchFrom  = !fromFilter   || r.from === fromFilter;
         const matchTo    = !toFilter     || r.to === toFilter;
         const matchTrc   = !trcFilter    || r.trc === trcFilter;
@@ -287,14 +347,16 @@
         const matchCap   = !capFilter    || (r.capacity !== null && r.capacity >= capFilter);
         const dep        = r._depMinutes;
         const matchTime  = dep === null  || (dep >= timeFromMins && dep <= timeToMins);
+        const matchHour  = selectedHistogramHour === null ||
+          (dep !== null && Math.floor(dep / 60) === selectedHistogramHour);
 
         if (matchSearch && matchType && matchDay && matchFrom && matchTo &&
-            matchTrc && matchP && matchCap && matchTime) {
+            matchTrc && matchP && matchCap && matchTime && matchHour) {
           filteredIndices.push(i);
         }
       });
 
-      // Update map lines visibility
+      // Update map route lines
       if (map) {
         routeLines.forEach((line, i) => {
           if (!line) return;
@@ -304,9 +366,30 @@
             if (map.hasLayer(line)) map.removeLayer(line);
           }
         });
+
+        // Show only markers whose location appears in a visible route
+        const usedLocations = new Set();
+        filteredIndices.forEach(i => {
+          usedLocations.add(ROUTES_DATA[i].from);
+          usedLocations.add(ROUTES_DATA[i].to);
+        });
+        Object.entries(locationMarkers).forEach(([name, marker]) => {
+          if (usedLocations.has(name)) {
+            if (!map.hasLayer(marker)) marker.addTo(map);
+          } else {
+            if (map.hasLayer(marker)) map.removeLayer(marker);
+          }
+        });
       }
 
       const filtered = filteredIndices.map(i => ROUTES_DATA[i]);
+
+      // Refresh dashboard widgets
+      updateStatCards(filtered);
+      drawHistogram(filtered);
+      drawDaysChart(filtered);
+
+      // Render table
       const container = document.getElementById('routes-table-container');
       let html = `<p><strong>Showing ${filtered.length} of ${ROUTES_DATA.length} routes</strong></p>`;
       html += '<table class="routes-table"><tr>';
@@ -332,6 +415,119 @@
       }
       container.innerHTML = html;
     }
+
+    // ============================================
+    // DASHBOARD WIDGET HELPERS
+    // ============================================
+    function updateStatCards(filtered) {
+      document.getElementById('stat-total').textContent = filtered.length;
+      const hubs = new Set([...filtered.map(r => r.from), ...filtered.map(r => r.to)]);
+      document.getElementById('stat-hubs').textContent = hubs.size;
+      const withCap = filtered.filter(r => r.capacity != null);
+      document.getElementById('stat-avgcap').textContent = withCap.length
+        ? Math.round(withCap.reduce((s, r) => s + r.capacity, 0) / withCap.length)
+        : '-';
+      const typeCounts = {};
+      filtered.forEach(r => { typeCounts[r.tripType] = (typeCounts[r.tripType] || 0) + 1; });
+      document.getElementById('stat-type').textContent =
+        Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
+    }
+
+    function drawHistogram(filteredRoutes) {
+      const canvas = document.getElementById('histogram-canvas');
+      if (!canvas || !canvas.offsetWidth) return;
+      canvas.width  = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight || 155;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      const padL = 30, padR = 10, padT = 18, padB = 25;
+      const chartW = W - padL - padR, chartH = H - padT - padB;
+
+      const hourCounts = new Array(24).fill(0);
+      filteredRoutes.forEach(r => {
+        if (r._depMinutes != null)
+          hourCounts[Math.min(Math.floor(r._depMinutes / 60), 23)]++;
+      });
+      const maxCount = Math.max(...hourCounts, 1);
+      const barW = chartW / 24;
+
+      ctx.fillStyle = '#f8f9ff';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = '#ccc';
+      ctx.beginPath();
+      ctx.moveTo(padL, padT);
+      ctx.lineTo(padL, padT + chartH);
+      ctx.lineTo(W - padR, padT + chartH);
+      ctx.stroke();
+
+      hourCounts.forEach((count, hour) => {
+        const bh = (count / maxCount) * chartH;
+        const x  = padL + hour * barW;
+        const y  = padT + chartH - bh;
+        ctx.fillStyle = (hour === selectedHistogramHour) ? '#f39c12' : '#3949ab';
+        ctx.fillRect(x + 1, y, barW - 2, bh);
+        if (count > 0 && bh > 12) {
+          ctx.fillStyle = '#fff';
+          ctx.font = Math.min(10, Math.floor(barW) - 1) + 'px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(count, x + barW / 2, y + Math.min(bh / 2 + 4, bh - 3));
+        }
+      });
+
+      ctx.fillStyle = '#666';
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'center';
+      for (let h = 0; h <= 24; h += 4) {
+        ctx.fillText(String(h).padStart(2, '0'), padL + h * barW, H - 8);
+      }
+    }
+
+    function drawDaysChart(filteredRoutes) {
+      const canvas = document.getElementById('days-canvas');
+      if (!canvas || !canvas.offsetWidth) return;
+      canvas.width  = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight || 105;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      const padL = 30, padR = 10, padT = 10, padB = 20;
+      const chartW = W - padL - padR, chartH = H - padT - padB;
+
+      const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const dayKeys   = ['1', '2', '3', '4', '5', '6', '0'];
+      const dayCounts = dayKeys.map(d => filteredRoutes.filter(r => r.ospFrequency.includes(d)).length);
+      const maxCount  = Math.max(...dayCounts, 1);
+      const barW      = chartW / 7;
+
+      ctx.fillStyle = '#f8f9ff';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = '#ccc';
+      ctx.beginPath();
+      ctx.moveTo(padL, padT);
+      ctx.lineTo(padL, padT + chartH);
+      ctx.lineTo(W - padR, padT + chartH);
+      ctx.stroke();
+
+      dayCounts.forEach((count, i) => {
+        const bh = (count / maxCount) * chartH;
+        const x  = padL + i * barW;
+        const y  = padT + chartH - bh;
+        ctx.fillStyle = '#27ae60';
+        ctx.fillRect(x + 2, y, barW - 4, bh);
+        if (count > 0) {
+          ctx.fillStyle = bh > 12 ? '#fff' : '#333';
+          ctx.font = '9px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(count, x + barW / 2, bh > 12 ? y + Math.min(bh / 2 + 4, bh - 3) : y - 3);
+        }
+        ctx.fillStyle = '#555';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(dayLabels[i], x + barW / 2, H - 4);
+      });
+    }
+
     filterRoutes(); // Initial render
 
     // ============================================
@@ -514,6 +710,8 @@
     // ============================================
     async function searchRoutes() {
       const resultsDiv = document.getElementById('results-container');
+      // Hide previous planner map until a new result is clicked
+      document.getElementById('planner-map-container').style.display = 'none';
       resultsDiv.innerHTML = `
         <div style="text-align:center;padding:30px;">
           <div class="spinner"></div>
@@ -547,8 +745,111 @@
       // Use setTimeout so the "Searching..." UI renders before heavy computation
       setTimeout(() => {
         const results = findDeliveryOptions(request);
+        lastSearchRequest = request;
+        lastSearchResults = results;
         renderResults(results, resultsDiv);
       }, 50);
+    }
+    // ============================================
+    // PLANNER MAP — show route + detour on row click
+    // ============================================
+    function showRouteOnPlannerMap(index) {
+      const result  = lastSearchResults && lastSearchResults[index];
+      const request = lastSearchRequest;
+      if (!result || !request) return;
+
+      const container = document.getElementById('planner-map-container');
+      container.style.display = 'block';
+      container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      // First-time initialisation of the planner map
+      if (!plannerMap) {
+        try {
+          plannerMap = L.map('planner-map').setView([50.5, 4.4], 8);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+          }).addTo(plannerMap);
+
+          // Static legend for the planner map
+          const pLegend = L.control({ position: 'bottomright' });
+          pLegend.onAdd = function () {
+            const div = L.DomUtil.create('div', 'map-legend');
+            const items = [
+              ['#3388ff', '&#9644;', 'Original route'],
+              ['#e74c3c', '&#9644;', 'Detour path'],
+              ['#3388ff', '&#9679;', 'Route start'],
+              ['#1a237e', '&#9679;', 'Route end'],
+              ['#27ae60', '&#9679;', 'Pickup'],
+              ['#f39c12', '&#9679;', 'Delivery']
+            ];
+            div.innerHTML = '<b style="display:block;margin-bottom:4px;">Legend</b>' +
+              items.map(function (it) {
+                return '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">' +
+                  '<span style="color:' + it[0] + ';font-size:13px;width:16px;text-align:center;flex-shrink:0;">' + it[1] + '</span>' +
+                  '<span>' + it[2] + '</span></div>';
+              }).join('');
+            return div;
+          };
+          pLegend.addTo(plannerMap);
+        } catch (e) {
+          console.warn('Planner map init failed:', e.message);
+          return;
+        }
+      }
+
+      // Clear previous drawing layers
+      plannerLayers.forEach(l => plannerMap.removeLayer(l));
+      plannerLayers = [];
+
+      const fromCoords = LOCATIONS[result.route.from];
+      const toCoords   = LOCATIONS[result.route.to];
+      const allBounds  = [];
+
+      // Helper to add a circle marker
+      function addDot(lat, lng, fillColor, popupHtml) {
+        const m = L.circleMarker([lat, lng], {
+          radius: 10, fillColor: fillColor, color: '#fff', weight: 2, fillOpacity: 1
+        }).addTo(plannerMap).bindPopup(popupHtml);
+        plannerLayers.push(m);
+        allBounds.push([lat, lng]);
+      }
+
+      // Original route — solid blue line
+      if (fromCoords && toCoords) {
+        const orig = L.polyline(
+          [[fromCoords.lat, fromCoords.lng], [toCoords.lat, toCoords.lng]],
+          { color: '#3388ff', weight: 5, opacity: 0.7 }
+        ).addTo(plannerMap).bindPopup('<b>Original route</b><br>' + result.route.from + ' → ' + result.route.to);
+        plannerLayers.push(orig);
+      }
+
+      // Detour path — red dashed: route-from → pickup → delivery → route-to
+      const detourPts = [];
+      if (fromCoords) detourPts.push([fromCoords.lat, fromCoords.lng]);
+      detourPts.push([request.pickupLocation.lat,   request.pickupLocation.lng]);
+      detourPts.push([request.deliveryLocation.lat, request.deliveryLocation.lng]);
+      if (toCoords)   detourPts.push([toCoords.lat, toCoords.lng]);
+      if (detourPts.length >= 2) {
+        const detour = L.polyline(detourPts, {
+          color: '#e74c3c', weight: 3, opacity: 0.9, dashArray: '8 6'
+        }).addTo(plannerMap).bindPopup('<b>Detour path</b><br>Route start → Pickup → Delivery → Route end');
+        plannerLayers.push(detour);
+      }
+
+      // Markers — distinct colour per role
+      if (fromCoords) addDot(fromCoords.lat, fromCoords.lng, '#3388ff',
+        '<b>🚩 Route Start</b><br>' + result.route.from);
+      if (toCoords)   addDot(toCoords.lat,   toCoords.lng,   '#1a237e',
+        '<b>🏁 Route End</b><br>' + result.route.to);
+      addDot(request.pickupLocation.lat,   request.pickupLocation.lng,   '#27ae60',
+        '<b>📦 Pickup</b><br>' + request.pickupLocation.name);
+      addDot(request.deliveryLocation.lat, request.deliveryLocation.lng, '#f39c12',
+        '<b>🎯 Delivery</b><br>' + request.deliveryLocation.name);
+
+      if (allBounds.length) {
+        plannerMap.fitBounds(L.latLngBounds(allBounds), { padding: [40, 40] });
+      }
+      plannerMap.invalidateSize();
     }
   </script>
 

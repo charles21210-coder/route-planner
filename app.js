@@ -456,6 +456,7 @@ function renderResults(results, container) {
   }
 
   let html = '<h3>Top 10 Options (sorted by additional time)</h3>';
+  html += '<p style="font-size:12px;color:#666;margin-bottom:8px;">💡 Click any row to see the route and detour on the map below.</p>';
   html += '<table class="results-table">';
   html += `<tr>
     <th>#</th>
@@ -479,7 +480,8 @@ function renderResults(results, container) {
     if (!r.withinTimeWindow) warnings.push('🟠 Outside time window');
 
     const rankLabel = i === 0 ? '🥇 1' : i === 1 ? '🥈 2' : i === 2 ? '🥉 3' : (i + 1);
-    html += `<tr class="${warnings.length ? 'has-warning' : 'good-match'}">
+    html += `<tr class="${warnings.length ? 'has-warning' : 'good-match'}"
+              style="cursor:pointer;" onclick="showRouteOnPlannerMap(${i})">
       <td><strong>${rankLabel}</strong></td>
       <td><strong>${r.route.service}</strong><br><small>${r.route.trip}</small></td>
       <td>${r.route.from} → ${r.route.to}</td>
