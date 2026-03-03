@@ -606,8 +606,15 @@ function renderResults(results, container, isFallback = false, request = null) {
     const days = r.route.ospFrequency.split('').map(d => dayNames[d] || d).join(', ');
     
     const warnings = [];
-    if (r.capacityWarning) warnings.push('🟡 Bigger truck needed');
-    if (!r.withinTimeWindow) warnings.push('🟠 Outside time window');
+    let negativeWarningCount = 0;
+    if (r.capacityWarning) {
+      warnings.push('🟡 Bigger truck needed');
+      negativeWarningCount++;
+    }
+    if (!r.withinTimeWindow) {
+      warnings.push('🟠 Outside time window');
+      negativeWarningCount++;
+    }
 
     // Historical spare capacity warnings
     if (r.tlStats) {
@@ -616,8 +623,10 @@ function renderResults(results, container, isFallback = false, request = null) {
         warnings.push('✅ Spare capacity available');
       } else if (r.tlStats.avgSpare > 0) {
         warnings.push('🟡 Tight fit (might work some days)');
+        negativeWarningCount++;
       } else {
         warnings.push('🔴 Usually full');
+        negativeWarningCount++;
       }
     }
 
@@ -632,7 +641,7 @@ function renderResults(results, container, isFallback = false, request = null) {
     const spareCell = r.tlStats ? `<td>${r.tlStats.avgSpare.toFixed(1)}</td>` : '<td>-</td>';
 
     const rankLabel = i === 0 ? '🥇 1' : i === 1 ? '🥈 2' : i === 2 ? '🥉 3' : (i + 1);
-    html += `<tr class="${warnings.length ? 'has-warning' : 'good-match'}"
+    html += `<tr class="${negativeWarningCount > 0 ? 'has-warning' : 'good-match'}"
               style="cursor:pointer;" onclick="showRouteOnPlannerMap(${i})">
       <td><strong>${rankLabel}</strong></td>
       <td><strong>${r.route.service}</strong><br><small>${r.route.trip}</small></td>
