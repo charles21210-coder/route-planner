@@ -21,6 +21,16 @@
         📦 New Delivery
       </button>
     </nav>
+    <div class="upload-section">
+      <label class="upload-btn" title="Load a tab-separated truckload .txt file">
+        📊 Load Truckload Data
+        <input type="file" id="truckload-file-input" accept=".txt" style="display:none;"
+               onchange="handleTruckloadFile(this)">
+      </label>
+      <span id="truckload-status" class="upload-status">No data loaded</span>
+      <button id="truckload-clear-btn" class="upload-clear-btn" style="display:none;"
+              onclick="clearTruckloadData()">✕ Clear</button>
+    </div>
   </header>
 
   <!-- TAB 1: All Routes View (Dashboard) -->
@@ -43,6 +53,10 @@
       <div class="stat-card">
         <div class="stat-value" id="stat-type">-</div>
         <div class="stat-label">Top Trip Type</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-netload">-</div>
+        <div class="stat-label">Avg Network Load</div>
       </div>
     </div>
 
@@ -395,17 +409,30 @@
       html += '<table class="routes-table"><tr>';
       html += '<th>Service</th><th>From</th><th>To</th><th>TRC</th><th>Dep</th>';
       html += '<th>Arr</th><th>Dist</th><th>Dur</th><th>Cap</th>';
+      html += '<th>Avg Load %</th><th>Avg Spare</th><th>Trips</th>';
       html += '<th>Type</th><th>Days</th><th>P70/P90</th></tr>';
 
       filtered.slice(0, 200).forEach(r => {
         const depStr = r._depMinutes !== null ? formatMinutes(r._depMinutes) : r.departure;
         const arrStr = r._arrMinutes !== null ? formatMinutes(r._arrMinutes) : r.arrival;
+        const tl = getTruckloadStats(r.service, r.trip, r.from, r.to);
+        let loadCell, spareCell, tripsCell;
+        if (tl) {
+          const cls = tl.avgLoadPct < LOAD_THRESHOLD_GREEN ? 'load-green'
+                    : tl.avgLoadPct <= LOAD_THRESHOLD_YELLOW ? 'load-yellow' : 'load-red';
+          loadCell  = `<td><span class="load-badge ${cls}">${tl.avgLoadPct.toFixed(1)}%</span></td>`;
+          spareCell = `<td>${tl.avgSpare.toFixed(1)}</td>`;
+          tripsCell = `<td>${tl.trips}</td>`;
+        } else {
+          loadCell = spareCell = tripsCell = '<td>-</td>';
+        }
         html += `<tr>
           <td>${r.service}</td><td>${r.from}</td><td>${r.to}</td><td>${r.trc || ''}</td>
           <td>${depStr}</td><td>${arrStr}</td>
           <td>${r.plannedDistance != null ? r.plannedDistance + 'km' : ''}</td>
           <td>${r.plannedDuration != null ? r.plannedDuration + 'min' : ''}</td>
           <td>${r.capacity != null ? r.capacity : ''}</td>
+          ${loadCell}${spareCell}${tripsCell}
           <td>${r.tripType}</td><td>${r.ospFrequency}</td><td>${r.p70p90 || ''}</td>
         </tr>`;
       });
@@ -431,6 +458,11 @@
       filtered.forEach(r => { typeCounts[r.tripType] = (typeCounts[r.tripType] || 0) + 1; });
       document.getElementById('stat-type').textContent =
         Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
+      const netLoad = getNetworkAvgLoad();
+      const netLoadEl = document.getElementById('stat-netload');
+      if (netLoadEl) {
+        netLoadEl.textContent = netLoad !== null ? netLoad.toFixed(1) + '%' : '-';
+      }
     }
 
     function drawHistogram(filteredRoutes) {
@@ -531,8 +563,51 @@
     filterRoutes(); // Initial render
 
     // ============================================
-    // AUTOCOMPLETE FOR LOCATION INPUTS
+    // TRUCKLOAD FILE UPLOAD HANDLER
     // ============================================
+    function handleTruckloadFile(input) {
+      const file = input.files[0];
+      if (!file) return;
+      const statusEl = document.getElementById('truckload-status');
+      statusEl.textContent = '⏳ Loading...';
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const text = e.target.result;
+        TRUCKLOAD_DATA = parseTruckloadFile(text);
+        TRUCKLOAD_STATS = computeTruckloadStats(TRUCKLOAD_DATA);
+        if (TRUCKLOAD_DATA.length === 0) {
+          statusEl.textContent = '⚠️ No valid records found';
+          document.getElementById('truckload-clear-btn').style.display = 'none';
+        } else {
+          // Determine date range in a single pass
+          let minDate = TRUCKLOAD_DATA[0].date, maxDate = TRUCKLOAD_DATA[0].date;
+          for (let j = 1; j < TRUCKLOAD_DATA.length; j++) {
+            const d = TRUCKLOAD_DATA[j].date;
+            if (d < minDate) minDate = d;
+            if (d > maxDate) maxDate = d;
+          }
+          statusEl.textContent = `✅ Loaded ${TRUCKLOAD_DATA.length} records (${minDate} – ${maxDate})`;
+          document.getElementById('truckload-clear-btn').style.display = '';
+        }
+        // Reset file input so the same file can be re-selected
+        input.value = '';
+        // Refresh the routes table and stat cards with new data
+        filterRoutes();
+      };
+      reader.onerror = function() {
+        statusEl.textContent = '❌ Error reading file';
+        input.value = '';
+      };
+      reader.readAsText(file);
+    }
+
+    function clearTruckloadData() {
+      TRUCKLOAD_DATA = [];
+      TRUCKLOAD_STATS = computeTruckloadStats([]); // resets _networkAvgLoad cache too
+      document.getElementById('truckload-status').textContent = 'No data loaded';
+      document.getElementById('truckload-clear-btn').style.display = 'none';
+      filterRoutes();
+    }
     const acState = {
       pickup:   { selected: null, activeIndex: -1, nominatimTimer: null, results: [] },
       delivery: { selected: null, activeIndex: -1, nominatimTimer: null, results: [] }
@@ -747,7 +822,7 @@
         const { results, isFallback } = findDeliveryOptions(request);
         lastSearchRequest = request;
         lastSearchResults = results;
-        renderResults(results, resultsDiv, isFallback);
+        renderResults(results, resultsDiv, isFallback, request);
       }, 50);
     }
     // ============================================

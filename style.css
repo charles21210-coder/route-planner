@@ -245,3 +245,61 @@ tr.good-match { background: #e8f5e9; }
   .map-container { flex: none; min-height: 280px; }
   .tab-content { padding: 12px 14px; }
 }
+
+/* ============================================
+   TRUCKLOAD FILE UPLOAD
+   ============================================ */
+.upload-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.upload-btn {
+  display: inline-block;
+  background: rgba(255,255,255,0.2);
+  color: white;
+  border: 2px solid rgba(255,255,255,0.5);
+  padding: 7px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+.upload-btn:hover { background: rgba(255,255,255,0.35); }
+
+.upload-status {
+  font-size: 13px;
+  color: rgba(255,255,255,0.9);
+}
+
+.upload-clear-btn {
+  background: rgba(255,255,255,0.15);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.4);
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+.upload-clear-btn:hover { background: rgba(255,80,80,0.5); }
+
+/* ============================================
+   LOAD FACTOR BADGES
+   ============================================ */
+.load-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.load-green  { background: #c8e6c9; color: #1b5e20; }
+.load-yellow { background: #fff9c4; color: #f57f17; }
+.load-red    { background: #ffcdd2; color: #b71c1c; }
