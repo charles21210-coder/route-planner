@@ -864,7 +864,7 @@
           pLegend.onAdd = function () {
             const div = L.DomUtil.create('div', 'map-legend');
             const items = [
-              ['#3388ff', '&#9644;', 'Original route'],
+              ['#3388ff', '&#9135;', 'Original route (dashed)'],
               ['#e74c3c', '&#9644;', 'Detour path'],
               ['#3388ff', '&#9679;', 'Route start'],
               ['#1a237e', '&#9679;', 'Route end'],
@@ -903,21 +903,30 @@
         allBounds.push([lat, lng]);
       }
 
-      // Original route — solid blue line
-      if (fromCoords && toCoords) {
+      // Original route — use OSRM road geometry if available, otherwise dashed straight-line fallback
+      if (result.directRouteGeometry) {
+        // directRouteGeometry is GeoJSON LineString; Leaflet wants [lat,lng] pairs
+        const latlngs = result.directRouteGeometry.coordinates.map(c => [c[1], c[0]]);
+        const orig = L.polyline(latlngs, {
+          color: '#3388ff', weight: 3, opacity: 0.5, dashArray: '10, 10'
+        }).addTo(plannerMap).bindPopup('<b>Original route (real roads)</b><br>' + result.route.from + ' → ' + result.route.to);
+        plannerLayers.push(orig);
+        latlngs.forEach(ll => allBounds.push(ll));
+      } else if (fromCoords && toCoords) {
+        // Fallback: straight dashed line
         const orig = L.polyline(
           [[fromCoords.lat, fromCoords.lng], [toCoords.lat, toCoords.lng]],
-          { color: '#3388ff', weight: 5, opacity: 0.7 }
-        ).addTo(plannerMap).bindPopup('<b>Original route</b><br>' + result.route.from + ' → ' + result.route.to);
+          { color: '#3388ff', weight: 3, opacity: 0.5, dashArray: '10, 10' }
+        ).addTo(plannerMap).bindPopup('<b>Original route</b><br>' + result.route.from + ' → ' + result.route.to + '<br><small>(approximate — road routing unavailable)</small>');
         plannerLayers.push(orig);
       }
 
-      // Detour path — use OSRM road geometry if available, otherwise red dashed straight-line fallback
+      // Detour path — use OSRM road geometry if available, otherwise straight-line fallback
       if (result.routeGeometry) {
         // routeGeometry is GeoJSON LineString; Leaflet wants [lat,lng] pairs
         const latlngs = result.routeGeometry.coordinates.map(c => [c[1], c[0]]);
         const detour = L.polyline(latlngs, {
-          color: '#e74c3c', weight: 3, opacity: 0.9, dashArray: '8 6'
+          color: '#e74c3c', weight: 4, opacity: 0.8
         }).addTo(plannerMap).bindPopup('<b>Detour path (real roads)</b><br>Route start → Pickup → Delivery → Route end');
         plannerLayers.push(detour);
         latlngs.forEach(ll => allBounds.push(ll));
@@ -930,8 +939,8 @@
         if (toCoords)   detourPts.push([toCoords.lat, toCoords.lng]);
         if (detourPts.length >= 2) {
           const detour = L.polyline(detourPts, {
-            color: '#e74c3c', weight: 3, opacity: 0.9, dashArray: '8 6'
-          }).addTo(plannerMap).bindPopup('<b>Detour path</b><br>Route start → Pickup → Delivery → Route end');
+            color: '#e74c3c', weight: 4, opacity: 0.8, dashArray: '8 6'
+          }).addTo(plannerMap).bindPopup('<b>Detour path</b><br>Route start → Pickup → Delivery → Route end<br><small>(approximate — road routing unavailable)</small>');
           plannerLayers.push(detour);
         }
       }
