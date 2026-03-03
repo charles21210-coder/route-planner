@@ -323,7 +323,7 @@ function haversineDistance(lat1, lng1, lat2, lng2) {
 function isOnRoute(routeFrom, routeTo, deliveryPoint, maxDetourKm = 25) {
   const fromCoords = LOCATIONS[routeFrom];
   const toCoords = LOCATIONS[routeTo];
-  if (!fromCoords || !toCoords) return { onRoute: false };
+  if (!fromCoords || !toCoords) return { onRoute: false, detourKm: 0, additionalMinutes: 0, distanceFromStart: 0 };
 
   // Direct distance of the route
   const directDist = haversineDistance(
@@ -353,18 +353,7 @@ function isOnRoute(routeFrom, routeTo, deliveryPoint, maxDetourKm = 25) {
 // ============================================
 // MAIN SEARCH FUNCTION
 // ============================================
-function findDeliveryOptions(request) {
-  /*
-    request = {
-      pickupLocation: { lat, lng, name },
-      deliveryLocation: { lat, lng, name },
-      containersNeeded: number,
-      earliestTime: "HH:MM",  (delivery window)
-      latestTime: "HH:MM",
-      dayOfWeek: number (0-6, 0=Sunday)
-    }
-  */
-
+function _doFind(request, maxDetourKm) {
   const results = [];
 
   for (const route of ROUTES_DATA) {
@@ -373,12 +362,12 @@ function findDeliveryOptions(request) {
 
     // 2. Check if pickup is near route origin OR on the route
     const pickupCheck = isOnRoute(
-      route.from, route.to, request.pickupLocation, 30
+      route.from, route.to, request.pickupLocation, maxDetourKm
     );
 
     // 3. Check if delivery is near route destination OR on the route
     const deliveryCheck = isOnRoute(
-      route.from, route.to, request.deliveryLocation, 30
+      route.from, route.to, request.deliveryLocation, maxDetourKm
     );
 
     // At least one of pickup/delivery must be on or near the route
@@ -414,8 +403,8 @@ function findDeliveryOptions(request) {
 
     // 6. Calculate total additional time (detour for both pickup and delivery)
     const totalAdditionalMinutes = 
-      (pickupCheck.onRoute ? pickupCheck.additionalMinutes : 0) +
-      (deliveryCheck.onRoute ? deliveryCheck.additionalMinutes : 0);
+      (pickupCheck.additionalMinutes || 0) +
+      (deliveryCheck.additionalMinutes || 0);
 
     results.push({
       route: route,
@@ -432,7 +421,15 @@ function findDeliveryOptions(request) {
 
   // Sort by additional time (ascending — least detour first)
   results.sort((a, b) => a.totalAdditionalMinutes - b.totalAdditionalMinutes);
-  return results.slice(0, 10);
+  return results;
+}
+
+function findDeliveryOptions(request) {
+  const results = _doFind(request, 50);
+  if (results.length > 0) return { results: results.slice(0, 10), isFallback: false };
+  // No routes within max detour — show closest 5 as fallback
+  const fallback = _doFind(request, Infinity);
+  return { results: fallback.slice(0, 5), isFallback: true };
 }
 
 function formatMinutes(mins) {
@@ -444,7 +441,7 @@ function formatMinutes(mins) {
 // ============================================
 // UI RENDERING
 // ============================================
-function renderResults(results, container) {
+function renderResults(results, container, isFallback = false) {
   if (results.length === 0) {
     container.innerHTML = `
       <div class="no-results">
@@ -455,7 +452,16 @@ function renderResults(results, container) {
     return;
   }
 
-  let html = '<h3>Top 10 Options (sorted by additional time)</h3>';
+  let html = '';
+  if (isFallback) {
+    html += `<div class="no-results" style="margin-bottom:12px;">
+      <h3>⚠️ No routes found within the normal detour range</h3>
+      <p>Showing the <strong>5 closest routes</strong> regardless of detour distance. A new or extended route may be required.</p>
+    </div>`;
+    html += '<h3>Closest 5 Options (sorted by additional time)</h3>';
+  } else {
+    html += '<h3>Top 10 Options (sorted by additional time)</h3>';
+  }
   html += '<p style="font-size:12px;color:#666;margin-bottom:8px;">💡 Click any row to see the route and detour on the map below.</p>';
   html += '<table class="results-table">';
   html += `<tr>

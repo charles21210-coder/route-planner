@@ -744,10 +744,10 @@
 
       // Use setTimeout so the "Searching..." UI renders before heavy computation
       setTimeout(() => {
-        const results = findDeliveryOptions(request);
+        const { results, isFallback } = findDeliveryOptions(request);
         lastSearchRequest = request;
         lastSearchResults = results;
-        renderResults(results, resultsDiv);
+        renderResults(results, resultsDiv, isFallback);
       }, 50);
     }
     // ============================================
