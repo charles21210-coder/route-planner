@@ -100,7 +100,7 @@ function getNetworkAvgLoad() {
 // Known locations with approximate coordinates (lat, lng)
 // These are the Belgian postal/logistics hubs from your data
 const LOCATIONS = {
-  "NEW BRU X": { lat: 50.8503, lng: 4.3517, city: "Brussels" },
+  "NEW BRU X": { lat: 50.9096, lng: 4.4075, city: "Brussels" },
   "NEW ANTWERPEN X": { lat: 51.2194, lng: 4.4025, city: "Antwerp" },
   "NEW GENT X": { lat: 51.0543, lng: 3.7174, city: "Ghent" },
   "NEW LIEGE X": { lat: 50.6292, lng: 5.5797, city: "Liège" },
