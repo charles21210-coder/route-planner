@@ -828,13 +828,16 @@
         dayOfWeek: parseInt(document.getElementById('delivery-day').value)
       };
 
-      // Use setTimeout so the "Searching..." UI renders before heavy computation
-      setTimeout(() => {
-        const { results, isFallback } = findDeliveryOptions(request);
-        lastSearchRequest = request;
-        lastSearchResults = results;
-        renderResults(results, resultsDiv, isFallback, request);
-      }, 50);
+      // Run Haversine search + OSRM refinement, updating status as we go
+      resultsDiv.innerHTML = `
+        <div style="text-align:center;padding:30px;">
+          <div class="spinner"></div>
+          <p id="search-status" style="margin-top:15px;font-size:16px;">⏳ Refining with road routing…</p>
+        </div>`;
+      const { results, isFallback } = await findDeliveryOptions(request);
+      lastSearchRequest = request;
+      lastSearchResults = results;
+      renderResults(results, resultsDiv, isFallback, request);
     }
     // ============================================
     // PLANNER MAP — show route + detour on row click
@@ -909,17 +912,28 @@
         plannerLayers.push(orig);
       }
 
-      // Detour path — red dashed: route-from → pickup → delivery → route-to
-      const detourPts = [];
-      if (fromCoords) detourPts.push([fromCoords.lat, fromCoords.lng]);
-      detourPts.push([request.pickupLocation.lat,   request.pickupLocation.lng]);
-      detourPts.push([request.deliveryLocation.lat, request.deliveryLocation.lng]);
-      if (toCoords)   detourPts.push([toCoords.lat, toCoords.lng]);
-      if (detourPts.length >= 2) {
-        const detour = L.polyline(detourPts, {
+      // Detour path — use OSRM road geometry if available, otherwise red dashed straight-line fallback
+      if (result.routeGeometry) {
+        // routeGeometry is GeoJSON LineString; Leaflet wants [lat,lng] pairs
+        const latlngs = result.routeGeometry.coordinates.map(c => [c[1], c[0]]);
+        const detour = L.polyline(latlngs, {
           color: '#e74c3c', weight: 3, opacity: 0.9, dashArray: '8 6'
-        }).addTo(plannerMap).bindPopup('<b>Detour path</b><br>Route start → Pickup → Delivery → Route end');
+        }).addTo(plannerMap).bindPopup('<b>Detour path (real roads)</b><br>Route start → Pickup → Delivery → Route end');
         plannerLayers.push(detour);
+        latlngs.forEach(ll => allBounds.push(ll));
+      } else {
+        // Detour path — red dashed: route-from → pickup → delivery → route-to
+        const detourPts = [];
+        if (fromCoords) detourPts.push([fromCoords.lat, fromCoords.lng]);
+        detourPts.push([request.pickupLocation.lat,   request.pickupLocation.lng]);
+        detourPts.push([request.deliveryLocation.lat, request.deliveryLocation.lng]);
+        if (toCoords)   detourPts.push([toCoords.lat, toCoords.lng]);
+        if (detourPts.length >= 2) {
+          const detour = L.polyline(detourPts, {
+            color: '#e74c3c', weight: 3, opacity: 0.9, dashArray: '8 6'
+          }).addTo(plannerMap).bindPopup('<b>Detour path</b><br>Route start → Pickup → Delivery → Route end');
+          plannerLayers.push(detour);
+        }
       }
 
       // Markers — distinct colour per role

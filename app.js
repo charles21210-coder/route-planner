@@ -546,12 +546,91 @@ function _doFind(request, maxDetourKm) {
   return results;
 }
 
-function findDeliveryOptions(request) {
+// ============================================
+// OSRM ROAD ROUTING
+// ============================================
+
+// Call OSRM public demo API; coords = [[lng,lat], ...]
+// Returns { distanceKm, durationMin, geometry } or null on failure
+async function getOSRMRoute(coords) {
+  const coordStr = coords.map(c => c.join(',')).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+      return {
+        distanceKm: data.routes[0].distance / 1000,
+        durationMin: data.routes[0].duration / 60,
+        geometry: data.routes[0].geometry
+      };
+    }
+  } catch (e) {
+    // Network or parse error — return null so Haversine fallback is used
+  }
+  return null;
+}
+
+// Refine the top candidates using real road routing from OSRM.
+// Updates each result with realDetourKm, realAdditionalMinutes, routeGeometry,
+// then re-sorts by realAdditionalMinutes ascending.
+const OSRM_RATE_LIMIT_MS = 200; // delay between requests to respect public demo server limits
+
+async function refineWithOSRM(results, request) {
+  const DELAY_MS = OSRM_RATE_LIMIT_MS;
+
+  for (let i = 0; i < results.length; i++) {
+    if (i > 0) {
+      // rate-limit: small pause between requests
+      await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+    }
+
+    const r = results[i];
+    const fromCoords = LOCATIONS[r.route.from];
+    const toCoords   = LOCATIONS[r.route.to];
+    if (!fromCoords || !toCoords) continue;
+
+    const fromLngLat = [fromCoords.lng, fromCoords.lat];
+    const toLngLat   = [toCoords.lng,   toCoords.lat];
+    const pickupLngLat   = [request.pickupLocation.lng,   request.pickupLocation.lat];
+    const deliveryLngLat = [request.deliveryLocation.lng, request.deliveryLocation.lat];
+
+    // Direct route (no detour)
+    const directRoute = await getOSRMRoute([fromLngLat, toLngLat]);
+    // Via-waypoint route: from → pickup → delivery → to
+    const viaRoute = await getOSRMRoute([fromLngLat, pickupLngLat, deliveryLngLat, toLngLat]);
+
+    if (directRoute && viaRoute) {
+      r.realDetourKm          = Math.round((viaRoute.distanceKm - directRoute.distanceKm) * 10) / 10;
+      r.realAdditionalMinutes = Math.round(viaRoute.durationMin - directRoute.durationMin);
+      r.routeGeometry         = viaRoute.geometry;
+    }
+  }
+
+  // Re-sort: first by time-window compliance, then by real additional minutes (falling back to Haversine)
+  results.sort((a, b) => {
+    if (a.withinTimeWindow !== b.withinTimeWindow) {
+      return a.withinTimeWindow ? -1 : 1;
+    }
+    const aMin = a.realAdditionalMinutes !== undefined ? a.realAdditionalMinutes : a.totalAdditionalMinutes;
+    const bMin = b.realAdditionalMinutes !== undefined ? b.realAdditionalMinutes : b.totalAdditionalMinutes;
+    return aMin - bMin;
+  });
+
+  return results;
+}
+
+async function findDeliveryOptions(request) {
   const results = _doFind(request, 50);
-  if (results.length > 0) return { results: results.slice(0, 10), isFallback: false };
+  if (results.length > 0) {
+    const top = results.slice(0, 10);
+    return { results: await refineWithOSRM(top, request), isFallback: false };
+  }
   // No routes within max detour — show closest 5 as fallback
   const fallback = _doFind(request, Infinity);
-  return { results: fallback.slice(0, 5), isFallback: true };
+  const top = fallback.slice(0, 5);
+  return { results: await refineWithOSRM(top, request), isFallback: true };
 }
 
 function formatMinutes(mins) {
@@ -647,9 +726,15 @@ function renderResults(results, container, isFallback = false, request = null) {
       <td><strong>${r.route.service}</strong><br><small>${r.route.trip}</small></td>
       <td>${r.route.from} → ${r.route.to}</td>
       <td>${r.route.departure}</td>
-      <td>${r.estimatedDeliveryTime}</td>
-      <td><strong>+${r.totalAdditionalMinutes} min</strong></td>
-      <td>+${r.pickupDetourKm + r.deliveryDetourKm} km</td>
+      <td>${r.estimatedDeliveryTime}</td>`;
+
+    const hasRealTime = r.realAdditionalMinutes !== undefined;
+    const hasRealKm   = r.realDetourKm !== undefined;
+    const displayTime = hasRealTime ? r.realAdditionalMinutes : r.totalAdditionalMinutes;
+    const displayKm   = hasRealKm   ? r.realDetourKm          : (r.pickupDetourKm + r.deliveryDetourKm);
+    html += `
+      <td><strong>+${displayTime} min</strong>${hasRealTime ? ` <small style="color:#888;">(est. ${r.totalAdditionalMinutes})</small>` : ''}</td>
+      <td>+${displayKm} km${hasRealKm ? ` <small style="color:#888;">(est. ${r.pickupDetourKm + r.deliveryDetourKm})</small>` : ''}</td>
       <td>${r.capacityAvailable} containers</td>
       ${loadCell}
       ${spareCell}
