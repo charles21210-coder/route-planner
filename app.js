@@ -468,6 +468,24 @@ function _doFind(request, maxDetourKm) {
     // At least one of pickup/delivery must be on or near the route
     if (!pickupCheck.onRoute && !deliveryCheck.onRoute) continue;
 
+    // Direction check: pickup should be closer to the route start,
+    // delivery should be closer to the route end.
+    const fromCoords = LOCATIONS[route.from];
+    const toCoords = LOCATIONS[route.to];
+    if (fromCoords && toCoords) {
+      const pickupToStart = haversineDistance(request.pickupLocation.lat, request.pickupLocation.lng, fromCoords.lat, fromCoords.lng);
+      const pickupToEnd = haversineDistance(request.pickupLocation.lat, request.pickupLocation.lng, toCoords.lat, toCoords.lng);
+      const deliveryToStart = haversineDistance(request.deliveryLocation.lat, request.deliveryLocation.lng, fromCoords.lat, fromCoords.lng);
+      const deliveryToEnd = haversineDistance(request.deliveryLocation.lat, request.deliveryLocation.lng, toCoords.lat, toCoords.lng);
+
+      // If pickup is closer to the end than the delivery is to the start,
+      // AND delivery is closer to the start than the pickup is to the end,
+      // then this route goes in the wrong direction for this request.
+      if (pickupToStart > deliveryToStart && deliveryToEnd > pickupToEnd) {
+        continue;
+      }
+    }
+
     // 4. Use pre-parsed timing
     const depMinutes = route._depMinutes;
     const arrMinutes = route._arrMinutes;
@@ -514,12 +532,17 @@ function _doFind(request, maxDetourKm) {
       capacityWarning: capacityWarning,
       capacityAvailable: route.capacity,
       tlStats: tlStats,
-      score: totalAdditionalMinutes + (withinWindow ? 0 : 60) + (capacityWarning ? 20 : 0)
+      score: (withinWindow ? 0 : 10000) + totalAdditionalMinutes + (capacityWarning ? 20 : 0)
     });
   }
 
-  // Sort by additional time (ascending — least detour first)
-  results.sort((a, b) => a.totalAdditionalMinutes - b.totalAdditionalMinutes);
+  // Sort: routes within the delivery time window first, then by additional time (ascending)
+  results.sort((a, b) => {
+    if (a.withinTimeWindow !== b.withinTimeWindow) {
+      return a.withinTimeWindow ? -1 : 1;
+    }
+    return a.totalAdditionalMinutes - b.totalAdditionalMinutes;
+  });
   return results;
 }
 
