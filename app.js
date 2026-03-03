@@ -2,6 +2,101 @@
 // ROUTE PLANNER - Main Application
 // ============================================
 
+// ============================================
+// TRUCKLOAD DATA
+// ============================================
+let TRUCKLOAD_DATA = [];          // raw parsed records (Normal trips only)
+let TRUCKLOAD_STATS = {};         // composite-key → aggregated stats
+let _networkAvgLoad = null;       // cached overall average load %
+
+// Load factor thresholds (shared between routes table and results table)
+const LOAD_THRESHOLD_GREEN  = 60;  // below this → green
+const LOAD_THRESHOLD_YELLOW = 85;  // below this → yellow, at/above → red
+
+/**
+ * Parse a tab-separated truckload .txt file.
+ * Returns an array of record objects (Empty trip types excluded).
+ */
+function parseTruckloadFile(text) {
+  const lines = text.split('\n');
+  const records = [];
+  // Skip header (first line); iterate remaining non-empty lines
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const cols = line.split('\t');
+    if (cols.length < 11) continue;
+
+    const triptype = cols[6].trim();
+    if (triptype === 'Empty') continue; // exclude empty trips from stats
+
+    const perTrajCap  = parseFloat(cols[8].trim().replace(',', '.'));
+    const shipped     = parseInt(cols[9].trim(), 10);
+    const truckloadPct = parseFloat(cols[10].trim().replace(/%/g, '').replace(',', '.'));
+
+    if (isNaN(perTrajCap) || isNaN(shipped) || isNaN(truckloadPct)) continue;
+
+    records.push({
+      date:           cols[0].trim(),
+      service:        cols[2].trim(),
+      route:          cols[3].trim(),
+      start:          cols[4].trim(),
+      end:            cols[5].trim(),
+      triptype,
+      perTrajCapacity: perTrajCap,
+      shipped,
+      truckloadPct
+    });
+  }
+  return records;
+}
+
+/**
+ * Compute per-route aggregate statistics from parsed records.
+ * Groups by service + route(trip) + start + end composite key.
+ */
+function computeTruckloadStats(records) {
+  const map = {};
+  for (const r of records) {
+    const key = `${r.service}|${r.route}|${r.start}|${r.end}`;
+    if (!map[key]) {
+      map[key] = { totalLoad: 0, totalShipped: 0, totalSpare: 0, count: 0 };
+    }
+    const s = map[key];
+    s.totalLoad    += r.truckloadPct;
+    s.totalShipped += r.shipped;
+    s.totalSpare   += (r.perTrajCapacity - r.shipped);
+    s.count++;
+  }
+  const result = {};
+  for (const key of Object.keys(map)) {
+    const s = map[key];
+    result[key] = {
+      avgLoadPct: s.totalLoad    / s.count,
+      avgShipped: s.totalShipped / s.count,
+      avgSpare:   s.totalSpare   / s.count,
+      trips:      s.count
+    };
+  }
+  // Cache the overall network average
+  if (records.length) {
+    _networkAvgLoad = records.reduce((acc, r) => acc + r.truckloadPct, 0) / records.length;
+  } else {
+    _networkAvgLoad = null;
+  }
+  return result;
+}
+
+/** Look up truckload stats for a route (returns null if no data). */
+function getTruckloadStats(service, trip, start, end) {
+  return TRUCKLOAD_STATS[`${service}|${trip}|${start}|${end}`] || null;
+}
+
+/** Compute overall average load % across all loaded records (cached). Returns null if no data. */
+function getNetworkAvgLoad() {
+  return _networkAvgLoad;
+}
+
 // Known locations with approximate coordinates (lat, lng)
 // These are the Belgian postal/logistics hubs from your data
 const LOCATIONS = {
@@ -398,8 +493,11 @@ function _doFind(request, maxDetourKm) {
     const withinWindow = estimatedDeliveryTime >= requestEarliest && 
                           estimatedDeliveryTime <= requestLatest;
 
-    // 5. Check capacity
+    // 5. Check capacity (max truck capacity)
     const capacityWarning = request.containersNeeded > route.capacity;
+
+    // 5b. Look up historical truckload stats for spare-capacity warnings
+    const tlStats = getTruckloadStats(route.service, route.trip, route.from, route.to);
 
     // 6. Calculate total additional time (detour for both pickup and delivery)
     const totalAdditionalMinutes = 
@@ -415,6 +513,7 @@ function _doFind(request, maxDetourKm) {
       withinTimeWindow: withinWindow,
       capacityWarning: capacityWarning,
       capacityAvailable: route.capacity,
+      tlStats: tlStats,
       score: totalAdditionalMinutes + (withinWindow ? 0 : 60) + (capacityWarning ? 20 : 0)
     });
   }
@@ -441,7 +540,7 @@ function formatMinutes(mins) {
 // ============================================
 // UI RENDERING
 // ============================================
-function renderResults(results, container, isFallback = false) {
+function renderResults(results, container, isFallback = false, request = null) {
   if (results.length === 0) {
     container.innerHTML = `
       <div class="no-results">
@@ -473,6 +572,8 @@ function renderResults(results, container, isFallback = false) {
     <th>Extra Time</th>
     <th>Extra KM</th>
     <th>Capacity</th>
+    <th>Avg Load %</th>
+    <th>Avg Spare</th>
     <th>Days</th>
     <th>Warnings</th>
   </tr>`;
@@ -485,6 +586,28 @@ function renderResults(results, container, isFallback = false) {
     if (r.capacityWarning) warnings.push('🟡 Bigger truck needed');
     if (!r.withinTimeWindow) warnings.push('🟠 Outside time window');
 
+    // Historical spare capacity warnings
+    if (r.tlStats) {
+      const containersNeeded = request ? request.containersNeeded : 0;
+      if (r.tlStats.avgSpare >= containersNeeded) {
+        warnings.push('✅ Spare capacity available');
+      } else if (r.tlStats.avgSpare > 0) {
+        warnings.push('🟡 Tight fit (might work some days)');
+      } else {
+        warnings.push('🔴 Usually full');
+      }
+    }
+
+    // Load factor cell
+    let loadCell = '<td>-</td>';
+    if (r.tlStats) {
+      const pct = r.tlStats.avgLoadPct.toFixed(1);
+      const cls = r.tlStats.avgLoadPct < LOAD_THRESHOLD_GREEN ? 'load-green'
+                : r.tlStats.avgLoadPct <= LOAD_THRESHOLD_YELLOW ? 'load-yellow' : 'load-red';
+      loadCell = `<td><span class="load-badge ${cls}">${pct}%</span></td>`;
+    }
+    const spareCell = r.tlStats ? `<td>${r.tlStats.avgSpare.toFixed(1)}</td>` : '<td>-</td>';
+
     const rankLabel = i === 0 ? '🥇 1' : i === 1 ? '🥈 2' : i === 2 ? '🥉 3' : (i + 1);
     html += `<tr class="${warnings.length ? 'has-warning' : 'good-match'}"
               style="cursor:pointer;" onclick="showRouteOnPlannerMap(${i})">
@@ -496,6 +619,8 @@ function renderResults(results, container, isFallback = false) {
       <td><strong>+${r.totalAdditionalMinutes} min</strong></td>
       <td>+${r.pickupDetourKm + r.deliveryDetourKm} km</td>
       <td>${r.capacityAvailable} containers</td>
+      ${loadCell}
+      ${spareCell}
       <td><small>${days}</small></td>
       <td>${warnings.join('<br>') || '✅ OK'}</td>
     </tr>`;
