@@ -23,12 +23,50 @@
     </nav>
   </header>
 
-  <!-- TAB 1: All Routes View -->
+  <!-- TAB 1: All Routes View (Dashboard) -->
   <section id="routes-section" class="tab-content active">
-    <div id="map" style="height: 500px; margin-bottom: 20px;"></div>
-    
+
+    <!-- Summary stat cards -->
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-total">-</div>
+        <div class="stat-label">Total Routes</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-hubs">-</div>
+        <div class="stat-label">Unique Hubs</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-avgcap">-</div>
+        <div class="stat-label">Avg Capacity</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-type">-</div>
+        <div class="stat-label">Top Trip Type</div>
+      </div>
+    </div>
+
+    <!-- Map (60%) + charts panel (40%) -->
+    <div class="dashboard-row">
+      <div id="map" class="map-container"></div>
+      <div class="charts-panel">
+        <div class="chart-section">
+          <div class="chart-title">
+            Departures by Hour
+            <span id="histogram-hint" class="chart-hint"></span>
+          </div>
+          <canvas id="histogram-canvas"></canvas>
+        </div>
+        <div class="chart-section">
+          <div class="chart-title">Routes by Day of Week</div>
+          <canvas id="days-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filter bar -->
     <div class="filters">
-      <input type="text" id="search-routes" placeholder="Search routes..." 
+      <input type="text" id="search-routes" placeholder="Search routes..."
              oninput="filterRoutes()">
       <select id="filter-type" onchange="filterRoutes()">
         <option value="">All Trip Types</option>
@@ -37,16 +75,16 @@
         <option value="MILKROUND">MILKROUND</option>
         <option value="HOME PICKUP">HOME PICKUP</option>
       </select>
-      <select id="filter-day" onchange="filterRoutes()">
-        <option value="">All Days</option>
-        <option value="1">Monday</option>
-        <option value="2">Tuesday</option>
-        <option value="3">Wednesday</option>
-        <option value="4">Thursday</option>
-        <option value="5">Friday</option>
-        <option value="6">Saturday</option>
-        <option value="0">Sunday</option>
-      </select>
+      <div id="filter-day-multi" class="day-filter-multi">
+        <span class="day-filter-label">Days:</span>
+        <label><input type="checkbox" value="1" onchange="filterRoutes()"> Mon</label>
+        <label><input type="checkbox" value="2" onchange="filterRoutes()"> Tue</label>
+        <label><input type="checkbox" value="3" onchange="filterRoutes()"> Wed</label>
+        <label><input type="checkbox" value="4" onchange="filterRoutes()"> Thu</label>
+        <label><input type="checkbox" value="5" onchange="filterRoutes()"> Fri</label>
+        <label><input type="checkbox" value="6" onchange="filterRoutes()"> Sat</label>
+        <label><input type="checkbox" value="0" onchange="filterRoutes()"> Sun</label>
+      </div>
       <select id="filter-from" onchange="filterRoutes()">
         <option value="">All Departing Hubs</option>
       </select>
@@ -70,7 +108,8 @@
         <input type="time" id="filter-time-to" value="23:59" onchange="filterRoutes()" style="min-width:120px;">
       </div>
     </div>
-    
+
+    <!-- Routes table -->
     <div id="routes-table-container"></div>
   </section>
 

@@ -337,7 +337,8 @@ function isOnRoute(routeFrom, routeTo, deliveryPoint, maxDetourKm = 25) {
 
   const detourKm = distViaPoint - directDist;
   // Estimate additional time: assume average speed 50 km/h for detour
-  const additionalMinutes = Math.round((detourKm / 50) * 60);
+  // Use Math.ceil so small detours (< 1 km) don't round down to 0 minutes
+  const additionalMinutes = Math.ceil((detourKm / 50) * 60);
 
   return {
     onRoute: detourKm <= maxDetourKm,
@@ -429,8 +430,8 @@ function findDeliveryOptions(request) {
     });
   }
 
-  // Sort by score (lower = better), then take top 10
-  results.sort((a, b) => a.score - b.score);
+  // Sort by additional time (ascending — least detour first)
+  results.sort((a, b) => a.totalAdditionalMinutes - b.totalAdditionalMinutes);
   return results.slice(0, 10);
 }
 
@@ -477,8 +478,9 @@ function renderResults(results, container) {
     if (r.capacityWarning) warnings.push('🟡 Bigger truck needed');
     if (!r.withinTimeWindow) warnings.push('🟠 Outside time window');
 
+    const rankLabel = i === 0 ? '🥇 1' : i === 1 ? '🥈 2' : i === 2 ? '🥉 3' : (i + 1);
     html += `<tr class="${warnings.length ? 'has-warning' : 'good-match'}">
-      <td>${i + 1}</td>
+      <td><strong>${rankLabel}</strong></td>
       <td><strong>${r.route.service}</strong><br><small>${r.route.trip}</small></td>
       <td>${r.route.from} → ${r.route.to}</td>
       <td>${r.route.departure}</td>
